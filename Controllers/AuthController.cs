@@ -40,10 +40,19 @@ if (!_passwordService.VerifyPassword(request.Password, user.PasswordHash))
 if (!user.IsActive)
     return Unauthorized(new { message = "حسابك تم تعطيله، يرجى مراجعة الإدارة" });
 
+            var warehouseId = user.BranchId.HasValue
+                ? await _context.Warehouses
+                    .Where(w => w.IsActive && w.BranchId == user.BranchId)
+                    .OrderByDescending(w => w.IsMainWarehouse)
+                    .ThenBy(w => w.Id)
+                    .Select(w => (int?)w.Id)
+                    .FirstOrDefaultAsync()
+                : null;
+
 user.LastLogin = DateTime.Now;
             await _context.SaveChangesAsync();
 
-           var token = _jwtService.GenerateToken(user, user.Role?.RoleName ?? "");
+           var token = _jwtService.GenerateToken(user, user.Role?.RoleName ?? "", warehouseId);
 
             return Ok(new
             {
@@ -55,7 +64,9 @@ user.LastLogin = DateTime.Now;
                     user.Username,
                     user.Email,
                     user.Phone,
-                    Role = user.Role?.RoleName
+                    Role = user.Role?.RoleName,
+                    user.BranchId,
+                    WarehouseId = warehouseId
                 }
             });
         }
@@ -104,6 +115,15 @@ user.LastLogin = DateTime.Now;
             if (user == null)
                 return NotFound();
 
+            var warehouseId = user.BranchId.HasValue
+                ? await _context.Warehouses
+                    .Where(w => w.IsActive && w.BranchId == user.BranchId)
+                    .OrderByDescending(w => w.IsMainWarehouse)
+                    .ThenBy(w => w.Id)
+                    .Select(w => (int?)w.Id)
+                    .FirstOrDefaultAsync()
+                : null;
+
             return Ok(new
             {
                 user.Id,
@@ -111,7 +131,9 @@ user.LastLogin = DateTime.Now;
                 user.Username,
                 user.Email,
                 user.Phone,
-                Role = user.Role?.RoleName
+                Role = user.Role?.RoleName,
+                user.BranchId,
+                WarehouseId = warehouseId
             });
         }
     }

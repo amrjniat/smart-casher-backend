@@ -15,16 +15,21 @@ namespace POS.Services
             _configuration = configuration;
         }
 
-        public string GenerateToken(User user, string roleName)
+        public string GenerateToken(User user, string roleName, int? warehouseId)
         {
-            var claims = new[]
-{
-    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-    new Claim(ClaimTypes.Name, user.Username),
-    new Claim(ClaimTypes.Role, roleName ?? "User"),
-    new Claim("FullName", user.FullName ?? ""),
-    new Claim("BranchId", user.BranchId?.ToString() ?? ""), // ← السطر الجديد
-};
+            var claims = new List<Claim>
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Role, roleName ?? "User"),
+                new Claim("FullName", user.FullName ?? "")
+            };
+
+            if (user.BranchId.HasValue)
+                claims.Add(new Claim("branchId", user.BranchId.Value.ToString()));
+
+            if (warehouseId.HasValue)
+                claims.Add(new Claim("warehouseId", warehouseId.Value.ToString()));
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(
                 _configuration["Jwt:Secret"] ?? "SuperSecretKey1234567890!@#$%^&*()"));
 

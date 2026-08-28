@@ -113,6 +113,32 @@ namespace POS.Controllers
             if (branch == null)
                 return NotFound(new { message = "الفرع غير موجود" });
 
+            var currentUser = await _context.Users
+                .Include(u => u.Role)
+                .FirstOrDefaultAsync(u => u.Id == GetCurrentUserId());
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
+            var isAdministrator = currentUser.Role?.RoleName is "مدير النظام" or "Admin" or "Administrator";
+            if (!isAdministrator && (!currentUser.BranchId.HasValue || currentUser.BranchId.Value != request.BranchId))
+                return Forbid();
+
+            var assignedWarehouseId = !isAdministrator
+                ? await _context.Warehouses
+                    .Where(w => w.IsActive && w.BranchId == currentUser.BranchId)
+                    .OrderByDescending(w => w.IsMainWarehouse)
+                    .ThenBy(w => w.Id)
+                    .Select(w => (int?)w.Id)
+                    .FirstOrDefaultAsync()
+                : null;
+            if (!isAdministrator && (!assignedWarehouseId.HasValue || assignedWarehouseId.Value != request.WarehouseId))
+                return Forbid();
+
+            var warehouse = await _context.Warehouses
+                .FirstOrDefaultAsync(w => w.Id == request.WarehouseId && w.IsActive);
+            if (warehouse == null || warehouse.BranchId != request.BranchId)
+                return BadRequest(new { message = "المستودع غير متاح لهذا الفرع" });
+
             // التحقق من المنتجات والتأكد من توفر الكمية
             foreach (var item in request.Items)
             {
@@ -121,7 +147,7 @@ namespace POS.Controllers
                     return BadRequest(new { message = $"المنتج {item.ProductId} غير موجود" });
 
                 var stock = await _context.ProductWarehouses
-                    .Where(pw => pw.ProductId == item.ProductId)
+                    .Where(pw => pw.ProductId == item.ProductId && pw.WarehouseId == request.WarehouseId)
                     .SumAsync(pw => pw.Quantity);
 
                 if (stock < item.Quantity)
@@ -179,7 +205,7 @@ namespace POS.Controllers
                 taxAmount += itemTax;
 
                 // خصم الكمية من المخزون
-                await UpdateStock(item.ProductId, item.Quantity);
+                await UpdateStock(item.ProductId, request.WarehouseId, item.Quantity);
             }
 
             // تحديث إجمالي الفاتورة
@@ -270,11 +296,10 @@ namespace POS.Controllers
             return userId != null ? int.Parse(userId) : 0;
         }
 
-        private async Task UpdateStock(int productId, int quantity)
+        private async Task UpdateStock(int productId, int warehouseId, int quantity)
         {
-            // خصم الكمية من أول مستودع متاح (أو حسب المنطق المطلوب)
             var productWarehouse = await _context.ProductWarehouses
-                .Where(pw => pw.ProductId == productId && pw.Quantity >= quantity)
+            .Where(pw => pw.ProductId == productId && pw.WarehouseId == warehouseId && pw.Quantity >= quantity)
                 .FirstOrDefaultAsync();
 
             if (productWarehouse != null)
