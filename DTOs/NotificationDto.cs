@@ -1,11 +1,8 @@
-﻿
-
-using System.ComponentModel.DataAnnotations.Schema;
-
-namespace POS.Models
+namespace POS.DTOs
 {
-    public class Notification : BaseEntity
+    public class NotificationDto
     {
+        public int Id { get; set; }
         public int UserId { get; set; }
         public string Title { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
@@ -14,14 +11,8 @@ namespace POS.Models
         public string? Source { get; set; }
         public int? EntityId { get; set; }
         public string? RedirectUrl { get; set; }
-        public bool IsRead { get; set; } = false;
+        public bool IsRead { get; set; }
+        public DateTime CreatedAt { get; set; }
         public DateTime? ReadAt { get; set; }
-
-        [ForeignKey("UserId")]
-        public virtual User User { get; set; } = null!;
     }
 }
-
-
-
-

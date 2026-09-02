@@ -4,6 +4,14 @@ namespace POS.Hubs
 {
     public class PosHub : Hub
     {
-        // يمكن ترك الكلاس فارغاً لأننا نرسل الإشعارات مباشرة من الـ Controllers عبر IHubContext
+        public async Task SendNotificationToUser(int userId, object notification)
+        {
+            await Clients.User(userId.ToString()).SendAsync("ReceiveNotification", notification);
+        }
+
+        public async Task UpdateUnreadCount(int userId, int count)
+        {
+            await Clients.User(userId.ToString()).SendAsync("UnreadCountUpdated", count);
+        }
     }
 }

@@ -30,15 +30,15 @@ namespace POS.Controllers
                 .Include(u => u.Role)
                 .FirstOrDefaultAsync(u => u.Username == request.Username);
 
-           if (user == null)
-    return Unauthorized(new { message = "اسم المستخدم غير صحيح" });
+            if (user == null)
+                return Unauthorized(new { message = "اسم المستخدم غير صحيح" });
 
-if (!_passwordService.VerifyPassword(request.Password, user.PasswordHash))
-    return Unauthorized(new { message = "كلمة المرور غير صحيحة" });
+            if (!_passwordService.VerifyPassword(request.Password, user.PasswordHash))
+                return Unauthorized(new { message = "كلمة المرور غير صحيحة" });
 
-// ✅ التحقق من أن الحساب مفعّل قبل السماح بتسجيل الدخول
-if (!user.IsActive)
-    return Unauthorized(new { message = "حسابك تم تعطيله، يرجى مراجعة الإدارة" });
+            // ✅ التحقق من أن الحساب مفعّل قبل السماح بتسجيل الدخول
+            if (!user.IsActive)
+                return Unauthorized(new { message = "حسابك تم تعطيله، يرجى مراجعة الإدارة" });
 
             var warehouseId = user.BranchId.HasValue
                 ? await _context.Warehouses
@@ -49,10 +49,10 @@ if (!user.IsActive)
                     .FirstOrDefaultAsync()
                 : null;
 
-user.LastLogin = DateTime.Now;
+            user.LastLogin = DateTime.Now;
             await _context.SaveChangesAsync();
 
-           var token = _jwtService.GenerateToken(user, user.Role?.RoleName ?? "", warehouseId);
+            var token = _jwtService.GenerateToken(user, user.Role?.RoleName ?? "", warehouseId);
 
             return Ok(new
             {

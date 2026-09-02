@@ -17,8 +17,12 @@ namespace POS.DTOs
 
     public class AdjustStockRequestDto
     {
-        public int NewQuantity { get; set; }
+        public int? NewQuantity { get; set; }
+        public int? Quantity { get; set; }
+        public int WarehouseId { get; set; } = 1;
+        public string Type { get; set; } = "add";
         public string? Notes { get; set; }
+        public string? Reason { get; set; }
     }
 
     public class AdjustStockResponseDto

@@ -367,24 +367,76 @@ namespace POS.Controllers
 
         // POST: api/products/5/adjust
         [HttpPost("{id}/adjust")]
+        [HttpPost("products/{id}/adjust")]
         public async Task<IActionResult> AdjustStock(int id, [FromBody] AdjustStockRequestDto dto)
         {
-            // نفس منطق Create: نجيب المستودع الرئيسي فعليًا من القاعدة بدل رقم ثابت
+            if (dto == null)
+                return BadRequest(new { message = "البيانات المرسلة غير صالحة" });
+
+            var productExists = await _context.Products.AnyAsync(p => p.Id == id);
+            if (!productExists)
+                return NotFound(new { message = "المنتج غير موجود" });
+
             var mainWarehouse = await _context.Warehouses.FirstOrDefaultAsync();
             if (mainWarehouse == null)
                 return BadRequest(new { message = "لا يوجد أي مستودع مسجل بالنظام" });
 
+            var warehouseId = dto.WarehouseId > 0 ? dto.WarehouseId : mainWarehouse.Id;
+            var warehouse = await _context.Warehouses.FirstOrDefaultAsync(w => w.Id == warehouseId);
+            if (warehouse == null)
+                return NotFound(new { message = "المستودع غير موجود" });
+
             var productWarehouse = await _context.ProductWarehouses
-                .FirstOrDefaultAsync(pw => pw.ProductId == id && pw.WarehouseId == mainWarehouse.Id);
+                .FirstOrDefaultAsync(pw => pw.ProductId == id && pw.WarehouseId == warehouseId);
 
             if (productWarehouse == null)
-                return NotFound(new { message = "لا يوجد سجل مخزون لهذا المنتج في هذا المخزن" });
+            {
+                productWarehouse = new ProductWarehouse
+                {
+                    ProductId = id,
+                    WarehouseId = warehouseId,
+                    Quantity = 0,
+                    ReservedQuantity = 0,
+                    ReorderPoint = 0
+                };
 
-            if (dto.NewQuantity < 0)
+                _context.ProductWarehouses.Add(productWarehouse);
+                await _context.SaveChangesAsync();
+            }
+
+            var adjustmentType = string.IsNullOrWhiteSpace(dto.Type) ? "add" : dto.Type.Trim().ToLowerInvariant();
+            var baseQuantity = dto.Quantity ?? dto.NewQuantity ?? 0;
+
+            if (baseQuantity < 0)
                 return BadRequest(new { message = "الكمية لا يمكن أن تكون سالبة" });
 
+            int newQuantity;
+
+            switch (adjustmentType)
+            {
+                case "add":
+                    newQuantity = productWarehouse.Quantity + baseQuantity;
+                    break;
+
+                case "subtract":
+                    newQuantity = Math.Max(0, productWarehouse.Quantity - baseQuantity);
+                    break;
+
+                case "set":
+                    if (!dto.NewQuantity.HasValue)
+                        return BadRequest(new { message = "يجب إرسال NewQuantity عند استخدام النوع set" });
+
+                    newQuantity = dto.NewQuantity.Value;
+                    if (newQuantity < 0)
+                        return BadRequest(new { message = "الكمية لا يمكن أن تكون سالبة" });
+                    break;
+
+                default:
+                    return BadRequest(new { message = "نوع التعديل غير صالح. استخدم add أو subtract أو set." });
+            }
+
             var previousQuantity = productWarehouse.Quantity;
-            var difference = dto.NewQuantity - previousQuantity;
+            var difference = newQuantity - previousQuantity;
 
             if (difference == 0)
                 return BadRequest(new { message = "الكمية الجديدة مطابقة للكمية الحالية" });
@@ -396,17 +448,17 @@ namespace POS.Controllers
             {
                 MovementNumber = $"ADJ-{DateTime.UtcNow:yyyyMMddHHmmss}",
                 ProductId = id,
-                WarehouseId = mainWarehouse.Id,
-                MovementType = "جرد",
+                WarehouseId = warehouseId,
+                MovementType = adjustmentType == "subtract" ? "إخراج" : adjustmentType == "set" ? "جرد" : "استلام",
                 Quantity = Math.Abs(difference),
                 UnitPrice = 0,
                 TotalPrice = 0,
-                Notes = dto.Notes ?? $"تعديل يدوي من {previousQuantity} إلى {dto.NewQuantity}",
+                Notes = dto.Notes ?? dto.Reason ?? $"تعديل يدوي من {previousQuantity} إلى {newQuantity}",
                 UserId = userId,
                 CreatedAt = DateTime.UtcNow
             };
 
-            productWarehouse.Quantity = dto.NewQuantity;
+            productWarehouse.Quantity = newQuantity;
 
             _context.StockMovements.Add(movement);
             await _context.SaveChangesAsync();
@@ -415,7 +467,7 @@ namespace POS.Controllers
             {
                 ProductId = id,
                 PreviousQuantity = previousQuantity,
-                NewQuantity = dto.NewQuantity,
+                NewQuantity = newQuantity,
                 Difference = difference,
                 Movement = new StockMovementDto
                 {
@@ -433,6 +485,26 @@ namespace POS.Controllers
             // TODO: بث SignalR هنا (الخطوة الجاية بعد ما تبعتلي ملف الـ Hub)
 
             return Ok(response);
+        }
+
+        // POST: api/products/5/restock
+        [HttpPost("{id}/restock")]
+        [HttpPost("Products/{id}/restock")]
+        public async Task<IActionResult> RestockStock(int id, [FromBody] AdjustStockRequestDto dto)
+        {
+            if (dto == null)
+                return BadRequest(new { message = "البيانات المرسلة غير صالحة" });
+
+            dto.Type = "add";
+            dto.Notes ??= dto.Reason ?? "استلام بضاعة";
+
+            if (!dto.Quantity.HasValue && dto.NewQuantity.HasValue)
+                dto.Quantity = dto.NewQuantity;
+
+            if (!dto.Quantity.HasValue || dto.Quantity.Value <= 0)
+                return BadRequest(new { message = "يجب إرسال Quantity أكبر من صفر" });
+
+            return await AdjustStock(id, dto);
         }
     }
 }

@@ -19,6 +19,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // 🔹 تسجيل الـ Services
 builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<PasswordService>();
+builder.Services.AddScoped<NotificationService>();
 
 // 🔹 إضافة خدمة SignalR
 builder.Services.AddSignalR();
