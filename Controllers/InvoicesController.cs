@@ -32,6 +32,9 @@ namespace POS.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
+            page = Math.Max(page, 1);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
             var query = _context.Invoices
                 .Include(i => i.Customer)
                 .Include(i => i.Branch)
@@ -103,6 +106,15 @@ namespace POS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] CreateInvoiceRequest request)
         {
+            if (request.Items.Count == 0 || request.Items.Any(item => item.Quantity <= 0))
+                return BadRequest(new { message = "يجب أن تحتوي الفاتورة على عناصر بكميات موجبة" });
+
+            if (request.Items.Any(item => item.UnitPrice.HasValue && item.UnitPrice.Value < 0))
+                return BadRequest(new { message = "سعر البيع لا يمكن أن يكون سالباً" });
+
+            if (request.DiscountAmount < 0)
+                return BadRequest(new { message = "الخصم لا يمكن أن يكون سالباً" });
+
             // التحقق من العميل
             var customer = await _context.Customers.FindAsync(request.CustomerId);
             if (customer == null)
@@ -168,7 +180,7 @@ namespace POS.Controllers
                 TaxAmount = 0,
                 DiscountAmount = request.DiscountAmount ?? 0,
                 TotalAmount = 0,
-                Status = "مدفوعة",
+                Status = "غير مدفوعة",
                 Notes = request.Notes,
                 CreatedAt = DateTime.Now
             };
@@ -243,6 +255,9 @@ namespace POS.Controllers
         [HttpPut("{id}/status")]
         public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
         {
+            if (request.Status is not ("مدفوعة" or "غير مدفوعة" or "ملغاة"))
+                return BadRequest(new { message = "حالة الفاتورة غير صالحة" });
+
             var invoice = await _context.Invoices.FindAsync(id);
             if (invoice == null)
                 return NotFound(new { message = "الفاتورة غير موجودة" });
@@ -256,7 +271,7 @@ namespace POS.Controllers
 
         // DELETE: api/invoices/5
         [HttpDelete("{id}")]
-        [Authorize(Roles = "مدير النظام")]
+        [Authorize(Roles = "Admin,مدير النظام,Administrator")]
         public async Task<IActionResult> Delete(int id)
         {
             var invoice = await _context.Invoices

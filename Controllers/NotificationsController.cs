@@ -183,7 +183,7 @@ namespace POS.Controllers
         // ==================== ➕ 7. إنشاء إشعار جديد (للاستخدام الداخلي أو للمشرف) ====================
         // POST: api/notifications
         [HttpPost]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,مدير النظام,Administrator")]
         public async Task<IActionResult> CreateNotification([FromBody] CreateNotificationRequest request)
         {
             try

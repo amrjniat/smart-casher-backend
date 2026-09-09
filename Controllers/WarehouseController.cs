@@ -1009,6 +1009,9 @@ namespace POS.Controllers
         [HttpPost("receive")]
         public async Task<IActionResult> ReceiveStock([FromBody] ReceiveStockRequest request)
         {
+            if (request.Quantity <= 0 || request.UnitPrice < 0)
+                return BadRequest(new { message = "الكمية يجب أن تكون موجبة والسعر غير سالب" });
+
             var product = await _context.Products.FindAsync(request.ProductId);
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });
@@ -1068,6 +1071,9 @@ namespace POS.Controllers
         [HttpPost("exit")]
         public async Task<IActionResult> ExitStock([FromBody] ExitStockRequest request)
         {
+            if (request.Quantity <= 0 || request.UnitPrice < 0)
+                return BadRequest(new { message = "الكمية يجب أن تكون موجبة والسعر غير سالب" });
+
             var product = await _context.Products.FindAsync(request.ProductId);
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });
@@ -1112,6 +1118,9 @@ namespace POS.Controllers
         [HttpPost("transfer")]
         public async Task<IActionResult> TransferStock([FromBody] TransferStockRequest request)
         {
+            if (request.Quantity <= 0 || request.FromWarehouseId == request.ToWarehouseId)
+                return BadRequest(new { message = "بيانات النقل غير صالحة" });
+
             var product = await _context.Products.FindAsync(request.ProductId);
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });

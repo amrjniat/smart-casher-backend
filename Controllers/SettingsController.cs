@@ -9,7 +9,7 @@ namespace POS.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,مدير النظام,Administrator")]
     public class SettingsController : ControllerBase
     {
         private readonly AppDbContext _context;

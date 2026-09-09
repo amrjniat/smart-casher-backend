@@ -10,7 +10,7 @@ namespace POS.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Roles = "Admin,مدير النظام,Administrator")]
     public class UsersController : ControllerBase
     {
         private readonly AppDbContext _context;
@@ -60,6 +60,9 @@ namespace POS.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
+            page = Math.Max(page, 1);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
             var query = _context.Users
                 .Include(u => u.Role)
                 .Include(u => u.Branch)

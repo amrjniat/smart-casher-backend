@@ -91,6 +91,9 @@ namespace POS.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
+            page = Math.Max(page, 1);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
             var query = _context.Customers.Where(c => c.IsActive);
 
             if (!string.IsNullOrEmpty(search))

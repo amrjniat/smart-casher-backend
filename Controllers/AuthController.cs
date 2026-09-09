@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using POS.Data;
 using POS.DTOs;
@@ -73,6 +74,7 @@ namespace POS.Controllers
 
         // 📌 إنشاء حساب جديد
         [HttpPost("register")]
+        [Authorize(Roles = "Admin,مدير النظام,Administrator")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
         {
             var existingUser = await _context.Users
@@ -102,6 +104,7 @@ namespace POS.Controllers
 
         // 📌 الحصول على معلومات المستخدم الحالي
         [HttpGet("me")]
+        [Authorize]
         public async Task<IActionResult> GetCurrentUser()
         {
             var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;

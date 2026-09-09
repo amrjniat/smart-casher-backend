@@ -79,9 +79,29 @@ namespace POS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] CreatePaymentRequest request)
         {
+            if (request.Amount <= 0)
+                return BadRequest(new { message = "مبلغ الدفع يجب أن يكون أكبر من صفر" });
+
             var invoice = await _context.Invoices.FindAsync(request.InvoiceId);
             if (invoice == null)
                 return NotFound(new { message = "الفاتورة غير موجودة" });
+
+            var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var currentUser = currentUserId == null
+                ? null
+                : await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == int.Parse(currentUserId));
+            if (currentUser == null)
+                return Unauthorized();
+
+            var isAdministrator = currentUser.Role?.RoleName is "Admin" or "مدير النظام" or "Administrator";
+            if (!isAdministrator && (!currentUser.BranchId.HasValue || currentUser.BranchId.Value != invoice.BranchId))
+                return Forbid();
+
+            var totalPaidBeforePayment = await _context.Payments
+                .Where(p => p.InvoiceId == request.InvoiceId)
+                .SumAsync(p => p.Amount);
+            if (totalPaidBeforePayment + request.Amount > invoice.TotalAmount)
+                return BadRequest(new { message = "مبلغ الدفع يتجاوز المتبقي على الفاتورة" });
 
             var method = await _context.PaymentMethods.FindAsync(request.PaymentMethodId);
             if (method == null)
@@ -117,7 +137,7 @@ namespace POS.Controllers
 
         // DELETE: api/payments/{id}
         [HttpDelete("{id}")]
-        [Authorize(Roles = "مدير النظام")]
+        [Authorize(Roles = "Admin,مدير النظام,Administrator")]
         public async Task<IActionResult> Delete(int id)
         {
             var payment = await _context.Payments.FindAsync(id);
