@@ -181,6 +181,7 @@ using Microsoft.EntityFrameworkCore;
 using POS.Data;
 using POS.DTOs;
 using POS.Models;
+using System.Security.Claims;
 
 namespace POS.Controllers
 {
@@ -200,12 +201,18 @@ namespace POS.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
+            var currentUser = await GetCurrentUserAsync();
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
             var products = await _context.Products
                 .Include(p => p.Category)
                 .Include(p => p.Unit)
                 .Include(p => p.Supplier)
                 .Include(p => p.ProductWarehouses)
                 .Where(p => p.IsActive)
+                .Where(p => IsAdministrator(currentUser) ||
+                    p.ProductWarehouses.Any(pw => pw.Warehouse.BranchId == currentUser.BranchId))
                 .ToListAsync();
 
             return Ok(products);
@@ -215,12 +222,18 @@ namespace POS.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
         {
+            var currentUser = await GetCurrentUserAsync();
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
             var product = await _context.Products
                 .Include(p => p.Category)
                 .Include(p => p.Unit)
                 .Include(p => p.Supplier)
                 .Include(p => p.ProductWarehouses)
-                .FirstOrDefaultAsync(p => p.Id == id);
+                .FirstOrDefaultAsync(p => p.Id == id && p.IsActive &&
+                    (IsAdministrator(currentUser) ||
+                     p.ProductWarehouses.Any(pw => pw.Warehouse.BranchId == currentUser.BranchId)));
 
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });
@@ -232,6 +245,21 @@ namespace POS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] ProductDto request)
         {
+            var currentUser = await GetCurrentUserAsync();
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
+            var referenceError = await ValidateProductReferencesAsync(request);
+            if (referenceError != null)
+                return BadRequest(new { message = referenceError });
+
+            if (await _context.Products.AnyAsync(p => p.ProductCode == request.ProductCode))
+                return Conflict(new { message = "رمز المنتج مستخدم مسبقاً" });
+
+            if (!string.IsNullOrWhiteSpace(request.Barcode) &&
+                await _context.Products.AnyAsync(p => p.Barcode == request.Barcode))
+                return Conflict(new { message = "الباركود مستخدم مسبقاً" });
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
@@ -252,10 +280,9 @@ namespace POS.Controllers
                     CreatedAt = DateTime.Now
                 };
 
-                var mainWarehouse = await _context.Warehouses.FirstOrDefaultAsync();
+                var mainWarehouse = await GetUserWarehouseAsync(currentUser);
                 if (mainWarehouse == null)
                 {
-                    await transaction.RollbackAsync();
                     return BadRequest(new { message = "لا يوجد أي مستودع مسجل بالنظام. الرجاء إنشاء مستودع أولاً." });
                 }
 
@@ -276,7 +303,14 @@ namespace POS.Controllers
 
                 await transaction.CommitAsync();
 
-                return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+                var createdProduct = await _context.Products
+                    .Include(p => p.Category)
+                    .Include(p => p.Unit)
+                    .Include(p => p.Supplier)
+                    .Include(p => p.ProductWarehouses)
+                    .FirstAsync(p => p.Id == product.Id);
+
+                return CreatedAtAction(nameof(GetById), new { id = product.Id }, createdProduct);
             }
             catch (Exception)
             {
@@ -289,10 +323,30 @@ namespace POS.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromBody] ProductDto request)
         {
-            var product = await _context.Products.FindAsync(id);
+            var currentUser = await GetCurrentUserAsync();
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
+            var product = await _context.Products
+                .Include(p => p.ProductWarehouses)
+                    .ThenInclude(pw => pw.Warehouse)
+                .FirstOrDefaultAsync(p => p.Id == id && p.IsActive &&
+                    (IsAdministrator(currentUser) ||
+                     p.ProductWarehouses.Any(pw => pw.Warehouse.BranchId == currentUser.BranchId)));
 
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });
+
+            var referenceError = await ValidateProductReferencesAsync(request);
+            if (referenceError != null)
+                return BadRequest(new { message = referenceError });
+
+            if (await _context.Products.AnyAsync(p => p.Id != id && p.ProductCode == request.ProductCode))
+                return Conflict(new { message = "رمز المنتج مستخدم مسبقاً" });
+
+            if (!string.IsNullOrWhiteSpace(request.Barcode) &&
+                await _context.Products.AnyAsync(p => p.Id != id && p.Barcode == request.Barcode))
+                return Conflict(new { message = "الباركود مستخدم مسبقاً" });
 
             product.ProductName = request.ProductName;
             product.ProductCode = request.ProductCode;
@@ -316,7 +370,16 @@ namespace POS.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
-            var product = await _context.Products.FindAsync(id);
+            var currentUser = await GetCurrentUserAsync();
+            if (currentUser == null)
+                return Unauthorized(new { message = "المستخدم غير موجود" });
+
+            var product = await _context.Products
+                .Include(p => p.ProductWarehouses)
+                    .ThenInclude(pw => pw.Warehouse)
+                .FirstOrDefaultAsync(p => p.Id == id && p.IsActive &&
+                    (IsAdministrator(currentUser) ||
+                     p.ProductWarehouses.Any(pw => pw.Warehouse.BranchId == currentUser.BranchId)));
 
             if (product == null)
                 return NotFound(new { message = "المنتج غير موجود" });
@@ -326,6 +389,48 @@ namespace POS.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "تم حذف المنتج بنجاح" });
+        }
+
+        private async Task<User?> GetCurrentUserAsync()
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userId, out var id))
+                return null;
+
+            return await _context.Users
+                .Include(u => u.Role)
+                .FirstOrDefaultAsync(u => u.Id == id && u.IsActive);
+        }
+
+        private static bool IsAdministrator(User user) =>
+            user.Role?.RoleName is "Admin" or "مدير النظام" or "Administrator";
+
+        private async Task<Warehouse?> GetUserWarehouseAsync(User user)
+        {
+            var warehouses = _context.Warehouses.Where(w => w.IsActive);
+            if (!IsAdministrator(user))
+                warehouses = warehouses.Where(w => w.BranchId == user.BranchId);
+
+            return await warehouses
+                .OrderByDescending(w => w.IsMainWarehouse)
+                .ThenBy(w => w.Id)
+                .FirstOrDefaultAsync();
+        }
+
+        private async Task<string?> ValidateProductReferencesAsync(ProductDto request)
+        {
+            if (!await _context.Units.AnyAsync(u => u.Id == request.UnitId && u.IsActive))
+                return "الوحدة غير موجودة أو غير مفعلة";
+
+            if (request.CategoryId.HasValue &&
+                !await _context.Categories.AnyAsync(c => c.Id == request.CategoryId.Value && c.IsActive))
+                return "التصنيف غير موجود أو غير مفعل";
+
+            if (request.SupplierId.HasValue &&
+                !await _context.Suppliers.AnyAsync(s => s.Id == request.SupplierId.Value && s.IsActive))
+                return "المورد غير موجود أو غير مفعل";
+
+            return null;
         }
 
         // ==========================================================

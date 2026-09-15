@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using POS.Data;
 using POS.Models;
 using System.Security.Claims;
+using System.Data;
 
 namespace POS.Controllers
 {
@@ -151,6 +152,8 @@ namespace POS.Controllers
             if (warehouse == null || warehouse.BranchId != request.BranchId)
                 return BadRequest(new { message = "المستودع غير متاح لهذا الفرع" });
 
+            await using var transaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
             // التحقق من المنتجات والتأكد من توفر الكمية
             foreach (var item in request.Items)
             {
@@ -180,7 +183,7 @@ namespace POS.Controllers
                 TaxAmount = 0,
                 DiscountAmount = request.DiscountAmount ?? 0,
                 TotalAmount = 0,
-                Status = "غير مدفوعة",
+                Status = "مدفوعة",
                 Notes = request.Notes,
                 CreatedAt = DateTime.Now
             };
@@ -195,7 +198,7 @@ namespace POS.Controllers
             foreach (var item in request.Items)
             {
                 var product = await _context.Products.FindAsync(item.ProductId);
-                var unitPrice = item.UnitPrice ?? product!.SellingPrice;
+                var unitPrice = product!.SellingPrice;
                 var totalPrice = unitPrice * item.Quantity;
                 var taxRate = product!.TaxRate;
                 var itemTax = totalPrice * (taxRate / 100);
@@ -217,13 +220,48 @@ namespace POS.Controllers
                 taxAmount += itemTax;
 
                 // خصم الكمية من المخزون
-                await UpdateStock(item.ProductId, request.WarehouseId, item.Quantity);
+                if (!await UpdateStock(item.ProductId, request.WarehouseId, item.Quantity))
+                    return BadRequest(new { message = $"الكمية غير متوفرة للمنتج {product.ProductName}" });
             }
+
+            var discountAmount = request.DiscountAmount ?? 0;
+            if (discountAmount > subTotal)
+                return BadRequest(new { message = "الخصم لا يمكن أن يتجاوز إجمالي المنتجات" });
 
             // تحديث إجمالي الفاتورة
             invoice.SubTotal = subTotal;
             invoice.TaxAmount = taxAmount;
-            invoice.TotalAmount = subTotal + taxAmount - invoice.DiscountAmount;
+            invoice.DiscountAmount = discountAmount;
+            invoice.TotalAmount = subTotal + taxAmount - discountAmount;
+
+            if (request.PaidAmount.HasValue)
+            {
+                if (request.PaidAmount.Value <= 0)
+                    return BadRequest(new { message = "مبلغ الدفع يجب أن يكون أكبر من صفر" });
+
+                if (!request.PaymentMethodId.HasValue)
+                    return BadRequest(new { message = "يجب تحديد طريقة الدفع" });
+
+                if (request.PaidAmount.Value > invoice.TotalAmount)
+                    return BadRequest(new { message = "مبلغ الدفع يتجاوز إجمالي الفاتورة" });
+
+                var paymentMethod = await _context.PaymentMethods.FindAsync(request.PaymentMethodId.Value);
+                if (paymentMethod == null)
+                    return NotFound(new { message = "طريقة الدفع غير موجودة" });
+
+                _context.Payments.Add(new Payment
+                {
+                    InvoiceId = invoice.Id,
+                    PaymentMethodId = paymentMethod.Id,
+                    Amount = request.PaidAmount.Value,
+                    PaymentDate = DateTime.Now,
+                    Notes = "دفعة عند إنشاء الفاتورة",
+                    CreatedAt = DateTime.Now
+                });
+
+                if (request.PaidAmount.Value >= invoice.TotalAmount)
+                    invoice.Status = "مدفوعة";
+            }
 
             // تسجيل حركة إخراج
             foreach (var item in request.Items)
@@ -236,8 +274,8 @@ namespace POS.Controllers
                     WarehouseId = request.WarehouseId,
                     MovementType = "إخراج",
                     Quantity = item.Quantity,
-                    UnitPrice = item.UnitPrice ?? product!.SellingPrice,
-                    TotalPrice = (item.UnitPrice ?? product!.SellingPrice) * item.Quantity,
+                    UnitPrice = product!.SellingPrice,
+                    TotalPrice = product.SellingPrice * item.Quantity,
                     Notes = $"فاتورة #{invoiceNumber}",
                     CustomerId = request.CustomerId,
                     UserId = GetCurrentUserId(),
@@ -247,6 +285,7 @@ namespace POS.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
 
             return CreatedAtAction(nameof(GetById), new { id = invoice.Id }, invoice);
         }
@@ -311,16 +350,17 @@ namespace POS.Controllers
             return userId != null ? int.Parse(userId) : 0;
         }
 
-        private async Task UpdateStock(int productId, int warehouseId, int quantity)
+        private async Task<bool> UpdateStock(int productId, int warehouseId, int quantity)
         {
             var productWarehouse = await _context.ProductWarehouses
             .Where(pw => pw.ProductId == productId && pw.WarehouseId == warehouseId && pw.Quantity >= quantity)
                 .FirstOrDefaultAsync();
 
-            if (productWarehouse != null)
-            {
-                productWarehouse.Quantity -= quantity;
-            }
+            if (productWarehouse == null)
+                return false;
+
+            productWarehouse.Quantity -= quantity;
+            return true;
         }
     }
 
@@ -332,6 +372,8 @@ namespace POS.Controllers
         public int BranchId { get; set; }
         public int WarehouseId { get; set; }
         public decimal? DiscountAmount { get; set; }
+        public decimal? PaidAmount { get; set; }
+        public int? PaymentMethodId { get; set; }
         public string? Notes { get; set; }
         public List<InvoiceItemRequest> Items { get; set; } = new();
     }
