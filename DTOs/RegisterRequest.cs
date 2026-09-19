@@ -17,5 +17,6 @@
         public string? Phone { get; set; }
         public string? StoreName { get; set; } // ✅ الحقل الجديد
         public int RoleId { get; set; } = 1;
+        public int? BranchId { get; set; }
     }
 }

@@ -205,6 +205,11 @@ namespace POS.Controllers
             if (currentUser == null)
                 return Unauthorized(new { message = "المستخدم غير موجود" });
 
+            if (!IsAdministrator(currentUser) &&
+                (!currentUser.BranchId.HasValue ||
+                 !await _context.Branches.AnyAsync(b => b.Id == currentUser.BranchId.Value && b.IsActive)))
+                return BadRequest(new { message = "المستخدم غير مرتبط بفرع صالح. يرجى تسجيل الدخول بعد ربطه بفرع." });
+
             var products = await _context.Products
                 .Include(p => p.Category)
                 .Include(p => p.Unit)
@@ -260,7 +265,16 @@ namespace POS.Controllers
                 await _context.Products.AnyAsync(p => p.Barcode == request.Barcode))
                 return Conflict(new { message = "الباركود مستخدم مسبقاً" });
 
-            using var transaction = await _context.Database.BeginTransactionAsync();
+            var mainWarehouse = await GetUserWarehouseAsync(currentUser, request.WarehouseId);
+            if (mainWarehouse == null)
+            {
+                var message = request.WarehouseId.HasValue
+                    ? "المستودع المحدد غير موجود أو غير مرتبط بفرع المستخدم الحالي"
+                    : "لا يوجد مستودع نشط مرتبط بفرع المستخدم الحالي. يرجى إنشاء المستودع ثم إعادة تسجيل الدخول.";
+                return NotFound(new { message });
+            }
+
+            await using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var product = new Product
@@ -279,12 +293,6 @@ namespace POS.Controllers
                     IsActive = true,
                     CreatedAt = DateTime.Now
                 };
-
-                var mainWarehouse = await GetUserWarehouseAsync(currentUser);
-                if (mainWarehouse == null)
-                {
-                    return BadRequest(new { message = "لا يوجد أي مستودع مسجل بالنظام. الرجاء إنشاء مستودع أولاً." });
-                }
 
                 _context.Products.Add(product);
                 await _context.SaveChangesAsync();
@@ -405,11 +413,20 @@ namespace POS.Controllers
         private static bool IsAdministrator(User user) =>
             user.Role?.RoleName is "Admin" or "مدير النظام" or "Administrator";
 
-        private async Task<Warehouse?> GetUserWarehouseAsync(User user)
+        private async Task<Warehouse?> GetUserWarehouseAsync(User user, int? warehouseId = null)
         {
+            if (!IsAdministrator(user) &&
+                (!user.BranchId.HasValue ||
+                 !await _context.Branches.AnyAsync(b => b.Id == user.BranchId.Value && b.IsActive)))
+                return null;
+
             var warehouses = _context.Warehouses.Where(w => w.IsActive);
+
             if (!IsAdministrator(user))
                 warehouses = warehouses.Where(w => w.BranchId == user.BranchId);
+
+            if (warehouseId.HasValue)
+                return await warehouses.FirstOrDefaultAsync(w => w.Id == warehouseId.Value);
 
             return await warehouses
                 .OrderByDescending(w => w.IsMainWarehouse)

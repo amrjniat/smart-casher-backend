@@ -48,5 +48,8 @@ namespace POS.DTOs
         // تُستخدم فقط عند الإضافة (Create) لإنشاء صف ProductWarehouse مرتبط
         [System.ComponentModel.DataAnnotations.Range(0, int.MaxValue)]
         public int InitialQuantity { get; set; } = 0;
+
+        [System.ComponentModel.DataAnnotations.Range(1, int.MaxValue)]
+        public int? WarehouseId { get; set; }
     }
 }

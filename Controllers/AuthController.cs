@@ -41,14 +41,19 @@ namespace POS.Controllers
             if (!user.IsActive)
                 return Unauthorized(new { message = "حسابك تم تعطيله، يرجى مراجعة الإدارة" });
 
-            var warehouseId = user.BranchId.HasValue
-                ? await _context.Warehouses
-                    .Where(w => w.IsActive && w.BranchId == user.BranchId)
-                    .OrderByDescending(w => w.IsMainWarehouse)
-                    .ThenBy(w => w.Id)
-                    .Select(w => (int?)w.Id)
-                    .FirstOrDefaultAsync()
-                : null;
+            if (!user.BranchId.HasValue)
+                return BadRequest(new { message = "الحساب غير مرتبط بفرع صالح. يرجى ربط المستخدم بفرع أولاً." });
+
+            var branch = await _context.Branches
+                .FirstOrDefaultAsync(b => b.Id == user.BranchId.Value && b.IsActive);
+            if (branch == null)
+                return NotFound(new { message = "الفرع المرتبط بالمستخدم غير موجود أو غير مفعل." });
+
+            var warehouse = await EnsureDefaultWarehouseAsync(branch.Id);
+            if (warehouse == null)
+                return NotFound(new { message = "تعذر إنشاء أو العثور على مستودع نشط للفرع المرتبط بالمستخدم." });
+
+            var warehouseId = (int?)warehouse.Id;
 
             user.LastLogin = DateTime.Now;
             await _context.SaveChangesAsync();
@@ -72,6 +77,36 @@ namespace POS.Controllers
             });
         }
 
+        private async Task<Warehouse?> EnsureDefaultWarehouseAsync(int branchId)
+        {
+            var warehouse = await _context.Warehouses
+                .Where(w => w.IsActive && w.BranchId == branchId)
+                .OrderByDescending(w => w.IsMainWarehouse)
+                .ThenBy(w => w.Id)
+                .FirstOrDefaultAsync();
+
+            if (warehouse != null)
+                return warehouse;
+
+            var branch = await _context.Branches.FindAsync(branchId);
+            if (branch == null || !branch.IsActive)
+                return null;
+
+            warehouse = new Warehouse
+            {
+                WarehouseName = $"المستودع الرئيسي - {branch.BranchName}",
+                WarehouseCode = $"BR-{branchId}-MAIN",
+                IsMainWarehouse = true,
+                BranchId = branchId,
+                IsActive = true,
+                CreatedAt = DateTime.Now
+            };
+
+            _context.Warehouses.Add(warehouse);
+            await _context.SaveChangesAsync();
+            return warehouse;
+        }
+
         // 📌 إنشاء حساب جديد
         [HttpPost("register")]
         [Authorize(Roles = "Admin,مدير النظام,Administrator")]
@@ -91,13 +126,24 @@ namespace POS.Controllers
                 Email = request.Email,
                 Phone = request.Phone,
                 RoleId = request.RoleId,
+                BranchId = request.BranchId,
                 //StoreName = request.StoreName,
                 IsActive = true,
                 CreatedAt = DateTime.Now
             };
 
+            if (!request.BranchId.HasValue)
+                return BadRequest(new { message = "يجب تحديد فرع صالح للحساب." });
+
+            var branch = await _context.Branches
+                .FirstOrDefaultAsync(b => b.Id == request.BranchId.Value && b.IsActive);
+            if (branch == null)
+                return NotFound(new { message = "الفرع المحدد غير موجود أو غير مفعل." });
+
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
+
+            await EnsureDefaultWarehouseAsync(branch.Id);
 
             return Ok(new { message = "تم إنشاء الحساب بنجاح" });
         }

@@ -167,6 +167,14 @@ namespace POS.Controllers
             if (!roleExists)
                 return BadRequest(new { message = "الدور المحدد غير موجود" });
 
+            if (!request.BranchId.HasValue)
+                return BadRequest(new { message = "يجب تحديد فرع صالح للحساب" });
+
+            var branchExists = await _context.Branches
+                .AnyAsync(b => b.Id == request.BranchId.Value && b.IsActive);
+            if (!branchExists)
+                return BadRequest(new { message = "الفرع المحدد غير موجود أو غير مفعل" });
+
             var user = new User
             {
                 FullName = request.FullName,
@@ -182,6 +190,9 @@ namespace POS.Controllers
 
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
+
+            if (user.BranchId.HasValue)
+                await EnsureDefaultWarehouseAsync(user.BranchId.Value);
 
             return CreatedAtAction(nameof(GetUser), new { id = user.Id }, new { message = "تم إنشاء الموظف بنجاح", userId = user.Id });
         }
@@ -202,14 +213,57 @@ namespace POS.Controllers
                 user.RoleId = request.RoleId.Value;
             }
 
+            var branchId = request.BranchId ?? user.BranchId;
+            if (!branchId.HasValue)
+                return BadRequest(new { message = "يجب ربط الحساب بفرع صالح" });
+
+            var branchExists = await _context.Branches
+                .AnyAsync(b => b.Id == branchId.Value && b.IsActive);
+            if (!branchExists)
+                return BadRequest(new { message = "الفرع المحدد غير موجود أو غير مفعل" });
+
             user.FullName = request.FullName ?? user.FullName;
             user.Email = request.Email ?? user.Email;
             user.Phone = request.Phone ?? user.Phone;
-            user.BranchId = request.BranchId ?? user.BranchId;
+            user.BranchId = branchId;
             user.UpdatedAt = DateTime.Now;
 
             await _context.SaveChangesAsync();
+
+            if (user.BranchId.HasValue)
+                await EnsureDefaultWarehouseAsync(user.BranchId.Value);
+
             return Ok(new { message = "تم تحديث بيانات الموظف" });
+        }
+
+        private async Task<Warehouse?> EnsureDefaultWarehouseAsync(int branchId)
+        {
+            var warehouse = await _context.Warehouses
+                .Where(w => w.IsActive && w.BranchId == branchId)
+                .OrderByDescending(w => w.IsMainWarehouse)
+                .ThenBy(w => w.Id)
+                .FirstOrDefaultAsync();
+
+            if (warehouse != null)
+                return warehouse;
+
+            var branch = await _context.Branches.FindAsync(branchId);
+            if (branch == null || !branch.IsActive)
+                return null;
+
+            warehouse = new Warehouse
+            {
+                WarehouseName = $"المستودع الرئيسي - {branch.BranchName}",
+                WarehouseCode = $"BR-{branchId}-MAIN",
+                IsMainWarehouse = true,
+                BranchId = branchId,
+                IsActive = true,
+                CreatedAt = DateTime.Now
+            };
+
+            _context.Warehouses.Add(warehouse);
+            await _context.SaveChangesAsync();
+            return warehouse;
         }
 
         // ==================== 🔒 6. تفعيل / تعطيل موظف ====================
